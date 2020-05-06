@@ -1,0 +1,334 @@
+#!/usr/bin/env python3
+
+__author__ = "Francesco Lorenzetti"
+__version__ = "0.1.0"
+__license__ = "GPL v2"
+
+import os, argparse, time, smtplib, ssl
+from random import randint
+from os import path
+from datetime import datetime
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import NoSuchElementException
+from selenium.common.exceptions import NoAlertPresentException
+
+
+class TimeNow:
+
+    base_timeout = 10 # how long before WebDriverWait will throw a TimeoutException
+    dumpsource = True # just for debug
+
+
+    def Log(self, msg, stdout=True, level='log'):
+        now = datetime.now().strftime("%d-%m-%y %H:%M:%S")
+        if self.opt.logtofile:
+            with open(self.opt.logfile, 'a') as logf:
+                logf.write(now + ' :: ' + level + ' :: ' + msg + '\n')
+        if stdout:
+            print(msg)
+
+
+    def InitWebDriver(self):
+        chrome_options = webdriver.ChromeOptions()
+        if self.opt.clionly:
+            chrome_options.add_argument('--headless')
+            chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument('--user-data-dir={}'.format(self.opt.user_data_dir))
+        self.driver = webdriver.Chrome(chrome_options=chrome_options)
+        self.wait = WebDriverWait(self.driver, self.base_timeout)
+
+
+    def WarnUser(self, message):
+        if not self.opt.clionly:
+            self.driver.execute_script('alert("{}")'.format(message))
+            self.WaitForAlert()
+        else:
+            self.Log('User interaction needed. Aborting')
+            self.driver.quit()
+            exit()
+
+
+    def WaitForAlert(self):
+        # get stucked here till the alert is dismissed
+        while True:
+            try:
+                alert = self.driver.switch_to.alert
+            except NoAlertPresentException:
+                # self.Log('alert dismissed')
+                break
+            time.sleep(1)
+        return
+
+
+    def WaitForUser(self, ec, timeout=base_timeout, idle=base_timeout):
+        # get stuck in this loop until the user fires the expected condition passed
+        while True:
+            try:
+                # wait checking the expected condition till timeout, then jump to TimeoutException
+                el = WebDriverWait(self.driver, timeout).until(ec)
+                break
+            except (TimeoutException, NoSuchElementException):
+                # wait till the next loop doing nothing
+                time.sleep(idle)
+        return el
+
+
+    def GetCart(self):
+        self.driver.get(self.opt.cart_url)
+
+        if '/cart' in self.driver.current_url:
+            # we're in the cart so we're logged in
+            self.Log('Logged in')
+            try:
+                #checkout_btn = self.wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, '.a-button.a-button-normal.a-button-primary.cart-checkout-button a')))
+                checkout_btn = self.driver.find_element( By.CSS_SELECTOR,
+                    '.a-button.a-button-normal.a-button-primary.cart-checkout-button a'
+                )
+                # click on the checkout btn and wait for page to load
+                checkout_btn.click()
+                self.Log('Proceeding to checkout')
+                self.wait.until(EC.url_contains('checkout/enter-checkout'))
+            except NoSuchElementException:
+                # tell the user he's supposed to interact and get to the checkout
+                self.Log('The proceed to checkout button has not been found or is disabled. waiting for user to get to the checkout.')
+                self.WarnUser('Please proceed manually to checkout')
+                self.WaitForUser(EC.url_contains('checkout/enter-checkout'))
+
+        else:
+            # we've been redirected away from the cart. assuming we're not logged in
+            self.Log('Not logged')
+            # tell the user he's supposed to interact and get to the checkout
+            self.WarnUser("Please fill in your ZIP code and login as usual, then fill in your cart and proceed to checkout.")
+            self.WaitForUser(EC.url_contains('checkout/enter-checkout'))
+
+
+    def WatchDog(self):
+        self.Log('Waiting forever for a free delivery slot to pop out. CTRL-C to quit.')
+        while True:
+            try:
+                delivery_slot_form = self.driver.find_element(By.ID, 'delivery-slot-form')
+            except NoSuchElementException:
+                # check address selection OR refresh and continue
+                self.Log('No delivery slot form found at all')
+                try:
+                    shipping_address_slot = self.driver.find_element(By.CSS_SELECTOR, '#shipping-address-form .checkout-address-radio-button-section input[name=addressRadioButton]')
+                except NoSuchElementException:
+                    # no delivery-slot-form and no shipping-address-form. happened to be a malformed page couple of times
+                    # This will happen again in AutoCheckout() once a time slot has been selected tho
+                    self.Log('No shipping address slot found either. About to ignore and continue')
+                    self.driver.refresh()
+                    time.sleep(randint(1,30))
+                    continue
+
+                # kicked back to address selection
+                if self.opt.autocheckout:
+                    shipping_address_slot.click()
+                    shipping_continue_btn = self.wait.until(EC.element_to_be_clickable((By.By.CSS_SELECTOR, "#shipping-address-panel-continue-button-bottom input")))
+                    shipping_continue_btn.click()
+                    delivery_slot_form = self.wait.until(EC.presence_of_element_located((By.ID, "delivery-slot-form")))
+                else:
+                    self.WarnUser('Looks like you have to select the address first. Go ahead.')
+                    self.Log('Waiting for the user to select an address')
+                    delivery_slot_form = self.WaitForUser(EC.presence_of_element_located((By.ID, "delivery-slot-form")), timeout=20, idle=2)
+
+
+            # check if unavaible warning text is present in the delivery slot form
+            if self.opt.unavailable_text not in delivery_slot_form.get_attribute("textContent"):
+                # with this radio list, click() on the input[type=radio] fields throws an ElementClickInterceptedException
+                # while targetting the wrapper div through element_to_be_clickable, will returns accordingly
+                delivery_slot_selector = '#delivery-slot-form .a-section:not(.hide) .a-section.delivery-window-radio-button-section'
+                first_slot_available = self.wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, delivery_slot_selector)))
+                slot_label = first_slot_available.find_element(By.CSS_SELECTOR, 'label .a-radio-label').get_attribute("textContent").strip()
+
+                self.Bark(slot_label)
+                if self.opt.autocheckout:
+                    self.AutoCheckOut(first_slot_available, slot_label)
+                break
+
+            # wait for a range between 1 and 30 sec
+            time.sleep(randint(1,30))
+            # refresh the checkout page
+            self.driver.refresh()
+        return
+
+
+    def Bark(self, slot_label):
+        self.Log("Looks like there are slots available!")
+        now = datetime.now().strftime("%d-%m-%y %H:%M:%S")
+        # linux desktop notification with libnotify
+        if self.opt.desktop_notification:
+            Notify.init("timenow")
+            notification = Notify.Notification.new(
+                "Yo!",
+                "Looks like there are slots available!",
+                "dialog-warning" # dialog-information, dialog-error
+            )
+            notification.show()
+        #send a mail
+        if self.opt.sendmail:
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(smtp_srv, smtp_port, context=context) as server:
+                server.login(smtp_user, smtp_password)
+                server.sendmail(smtp_user, smtp_to, 'Looks like there are delivery slots available! the firs is ' + slot_label)
+        # take a screenshot of the entire page
+        if self.opt.screenshot:
+            #height = self.driver.execute_script("return document.body.scrollHeight")
+            #self.driver.set_window_size(1920, height+300)
+            self.driver.save_screenshot(self.opt.program_dir + "/screens/slot available {}.png".format(now))
+        # dump page source for further investigation
+        if self.dumpsource:
+            with open(self.opt.program_dir + '/pgdumps/sourcedump' + now + '.html', 'a') as dump:
+                dump.write(self.driver.page_source)
+
+
+    def AutoCheckOut(self, first_slot_available, slot_label):
+        first_slot_available.click()
+        # with theese buttons, element_to_be_clickable needs to look for the disabled attribute of the input field itself, cause the wrapper div retrun always interactable
+        continue_btn = self.wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "#delivery-slot-panel-continue-button input")))
+        continue_btn.click()
+        self.Log(slot_label + ' choosen')
+
+        # wait till the loading page overlay disappear
+        try:
+            self.wait.until(EC.invisibility_of_element((By.ID, "fullpage-overlay")))
+        except TimeoutException:
+            self.Log('Loading page overlay still on top')
+
+        # double check that the button is visible
+        try:
+            self.wait.until(EC.visibility_of_element_located((By.ID, "houdini-checkout-place-order-button")))
+        except TimeoutException:
+            self.Log('Place order button not visible')
+
+        # check that the input is interactable
+        try:
+            place_order_btn = self.wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "#houdini-checkout-place-order-button input")))
+        except TimeoutException:
+            msg = 'The place order button seem disabled'
+            self.Log(msg)
+            self.WarnUser(msg + ', Fill in anything required and finalize the order yourself.')
+            #place_order_btn = self.WaitForUser(EC.element_to_be_clickable((By.CSS_SELECTOR, "#houdini-checkout-place-order-button")), idle=2)
+            return
+
+        now = datetime.now().strftime("%d-%m-%y %H:%M:%S")
+
+        # dump page source for further investigation
+        if self.dumpsource:
+            with open(self.opt.program_dir + '/pgdumps/sourcedump' + now + '.html', 'a') as dump:
+                dump.write(self.driver.page_source)
+
+        place_order_btn.click()
+        self.Log('Order placed')
+        time.sleep(6)
+        if self.opt.screenshot:
+            self.driver.save_screenshot(self.opt.program_dir + "/screens/order confirm {}.png".format(now))
+
+
+    def __init__(self, opt):
+        self.opt = opt
+        self.opt.cart_url = 'https://primenow.amazon.'+ self.opt.domain_ext +'/cart?ref_=pn_gw_nav_cart'
+        if self.opt.program_dir is None:
+            self.opt.program_dir = os.path.expanduser('~') + '/.timenow' # os.getcwd()
+        if self.opt.logfile is None:
+            self.opt.logfile = self.opt.program_dir + '/timenow.log'
+        if self.opt.user_data_dir is None:
+            self.opt.user_data_dir = self.opt.program_dir + '/chrome-user-data' # ~/.config/google-chrome
+
+        # TODO: check mail params
+
+        self.InitWebDriver()
+        self.GetCart()
+        self.WatchDog()
+
+
+def main(args):
+    try:
+        TimeNow(args)
+    #except (KeyboardInterrupt, Exception) as e:
+    except KeyboardInterrupt:
+        Log('Interrupted by user')
+    #driver.quit()
+
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser(
+        description="timenow is a checkout bot for Amazon Prime Now. It waits for a free delivery slot to appear to warn you and optionally autocheckout.",
+        epilog="https://github.com/frankIT/"
+    )
+
+    parser.add_argument("--domain-ext", action="store", dest='domain_ext', default="it", help="""
+        The Amazon Prime website you want to target: https://primenow.amazon.[DOMAIN_EXT]/""")
+
+    parser.add_argument("--unavailable-text", action="store", dest='unavailable_text', default="non sono attualmente disponibili", help="""
+        Part of the text shown in the delivery box form that warn about no delivery slots available.
+        Note that the main check will be done with this string.""")
+
+    parser.add_argument("--clionly", action="store_true", dest='clionly', default=False, help="""
+        Chrome will be launched headless (without a window).
+        This will obviously work only once browser interaction is not needed anymore.""")
+
+    parser.add_argument("--autocheckout", action="store_true", dest='autocheckout', default=False, help="""
+        Once a free delivery slot has popped out, select it and try to checkout automatically.
+        Note: For this to work you'll need to have a default option already set for payment, phone number and delivery instruction.
+        So it won't work on your first order without user interaction.""")
+
+    parser.add_argument("--desktop-notification", action="store_true", dest='desktop_notification', default=True, help="""
+        Pop a desktop notification when a free delivery slot appear.
+        Note: the notification is supposed to work on linux desktops supporting libnotify.""")
+
+    parser.add_argument("--no-send-mail", action="store_false", default=True, dest='sendmail', help="""
+        Don't send a mail when a free delivery slot has been found.""")
+
+    parser.add_argument("--no-screenshot", action="store_false", dest='screenshot', default=True, help="""
+        Don't take a screenshot of the available slot nor of the order confirmation page if --autocheckout has been enabled.""")
+
+    parser.add_argument("--no-logfile", action="store_false", dest='logtofile', default=True, help="""
+        Do not use a logfile.""")
+
+    parser.add_argument("--smtp-server", action="store", dest='smtp_srv', default="smtp.gmail.com", help="""
+        The server address to send the alert mail with. Default to smtp.gmail.com.
+        Note that to use gmail you have to flag the \"allow unsecure app\" option in your gmail account.""")
+
+    parser.add_argument("--smtp-port", action="store", dest='smtp_port', default=465, help="""
+        The server port to send the alert mail with. Default to 465.""")
+
+    parser.add_argument("--smtp-user", action="store", dest='smtp_user', help="""
+        The user to authenticate on the server used to send the alert mail with.""")
+
+    parser.add_argument("--smtp-password", action="store", dest='smtp_password', help="""
+        The password to authenticate on the server used to send the alert mail with.""")
+
+    parser.add_argument("--smtp-to", action="store", dest='smtp_to', help="""
+        The email address you want to recive the alert mail when a delivery slot will be available.""")
+
+    parser.add_argument("--user-data-dir", action="store", default=None, dest='user_data_dir', help="""
+        Chrome user data dir path. You can eventually set your everyday chrome one (usually ~/.config/google-chrome/),
+        so you'll not need to login the first time, but take into account that doing so
+        no other chrome instances have to be open to run the program.
+        I'd recommend to leave it create a new one as default, having to log in Amazon once manually.""")
+
+    parser.add_argument("--program-dir", action="store", dest='program_dir', default=None, help="""
+        The directory that will hold all the program's files.""")
+
+    parser.add_argument("--logfile", action="store", dest='logfile', default=None, help="""
+        Specify a custom path for the logfile.""")
+
+    parser.add_argument("--verbose", action="store_true", default=False, dest='verbose')
+
+    parser.add_argument("--version", action="version",
+        version="%(prog)s (version {version})".format(version=__version__))
+
+    args = parser.parse_args()
+
+    if args.desktop_notification:
+        import gi
+        gi.require_version('Notify', '0.7')
+        from gi.repository import Notify
+
+    main(args)

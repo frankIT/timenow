@@ -1,0 +1,13 @@
+.venv
+__pycache__
+chrome-user-data
+htmldumps
+test
+*.log
+
+develop-eggs
+dist
+src/*.egg-info
+tags
+build
+eggs
