@@ -32,49 +32,64 @@ timenow is a checkout bot for Amazon Prime Now. It waits for a free delivery
 slot to appear to warn you and optionally autocheckout.
 
 optional arguments:
+
   -h, --help            show this help message and exit
+
   --domain-ext DOMAIN_EXT
                         The Amazon Prime website you want to target:
                         https://primenow.amazon.[DOMAIN_EXT]/
+
   --unavailable-text UNAVAILABLE_TEXT
                         Part of the text shown in the delivery box form that
                         warn about no delivery slots available. Note that the
                         main check will be done with this string.
+
   --clionly             Chrome will be launched headless (without a window).
                         This will obviously work only once browser interaction
                         is not needed anymore.
+
   --autocheckout        Once a free delivery slot has popped out, select it
                         and try to checkout automatically. Note: For this to
                         work you'll need to have a default option already set
                         for payment, phone number and delivery instruction. So
                         it won't work on your first order without user
                         interaction.
+
   --desktop-notification
                         Pop a desktop notification when a free delivery slot
                         appear. Note: the notification is supposed to work on
                         linux desktops supporting libnotify.
+
   --no-send-mail        Don't send a mail when a free delivery slot has been
                         found.
+
   --no-screenshot       Don't take a screenshot of the available slot nor of
                         the order confirmation page if --autocheckout has been
                         enabled.
+
   --no-logfile          Do not use a logfile.
+
   --smtp-server SMTP_SRV
                         The server address to send the alert mail with.
                         Default to smtp.gmail.com. Note that to use gmail you
                         have to flag the "allow unsecure app" option in your
                         gmail account.
+
   --smtp-port SMTP_PORT
                         The server port to send the alert mail with. Default
                         to 465.
+
   --smtp-user SMTP_USER
                         The user to authenticate on the server used to send
                         the alert mail with.
+
   --smtp-password SMTP_PASSWORD
                         The password to authenticate on the server used to
                         send the alert mail with.
+
   --smtp-to SMTP_TO     The email address you want to recive the alert mail
                         when a delivery slot will be available.
+
   --user-data-dir USER_DATA_DIR
                         Chrome user data dir path. You can eventually set your
                         everyday chrome one (usually ~/.config/google-
@@ -83,9 +98,13 @@ optional arguments:
                         instances have to be open to run the program. I'd
                         recommend to leave it create a new one as default,
                         having to log in Amazon once manually.
+
   --program-dir PROGRAM_DIR
                         The directory that will hold all the program's files.
+
   --logfile LOGFILE     Specify a custom path for the logfile.
+
   --verbose
+
   --version             show program's version number and exit
 ```
