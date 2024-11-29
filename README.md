@@ -1,8 +1,8 @@
 
 About
 =====
-Timenow is a checkout bot for Amazon Prime Now.
-It is meant to help you place an order when Amazon delivery is not managing to cope with the demand.
+Timenow was a checkout bot for Amazon Prime Now.
+It was meant to help you place an order when Amazon delivery is not managing to cope with the demand.
 Nowadays This sounds like a very unlikely scenario, but the code has been written on march 2020, during the first COVID-19 outbreak in europe/italy, when every single grocery delivery service was overwhelmed, even the Amazon one. The only way I found not to physically go to the grocery store and wait ages inline to get in, was putting up this code :).
 Its main task is to warn you with a mail as soon as a free delivery slot will be available.
 If launched with `--autocheckout`, it will select the first slot available and complete the checkout as well.
